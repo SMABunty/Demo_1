@@ -1,0 +1,155 @@
+module BitStreamProcessor (
+    input wire clk,                   // Clock signal
+    input wire rst,                   // Reset signal
+    input wire fifo_write_enable,     // Enable writing to FIFO
+    input wire [1503:0] data_in,      // 1504-bit input chunk from BRAM
+    output wire bit_out,              // Single bit output
+    output wire valid,                // Output valid signal
+    output wire done,                 // Processing done signal
+    output wire fifo_full,            // FIFO full signal
+    output wire fifo_empty            // FIFO empty signal
+);
+
+    // Internal signals
+    wire [1503:0] fifo_data_out;      // FIFO output data (chunk)
+    wire fifo_read_enable;            // Enable reading from FIFO
+    wire fifo_empty_internal;         // Internal FIFO empty flag
+    wire bitstream_done;              // BitStreamConverter done signal
+
+    // Instantiate FIFO (3-level, 1504-bit width)
+    FIFO_1504x3 fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .write_enable(fifo_write_enable),
+        .read_enable(fifo_read_enable),
+        .data_in(data_in),
+        .data_out(fifo_data_out),
+        .full(fifo_full),
+        .empty(fifo_empty_internal)
+    );
+
+    // Instantiate BitStream Converter
+    BitStreamConverter bitstream_inst (
+        .clk(clk),
+        .rst(rst),
+        .start(!fifo_empty_internal),   // Start processing when FIFO is not empty
+        .data_in(fifo_data_out),
+        .bit_out(bit_out),
+        .valid(valid),
+        .done(bitstream_done)
+    );
+
+    // Control FIFO read enable based on bitstream processing
+    assign fifo_read_enable = bitstream_done;    // Read next chunk when the current chunk is done
+    assign fifo_empty = fifo_empty_internal;
+    assign done = fifo_empty_internal & bitstream_done;
+
+endmodule
+
+module FIFO_1504x3 (
+    input wire clk,
+    input wire rst,
+    input wire write_enable,
+    input wire read_enable,
+    input wire [1503:0] data_in,
+    output reg [1503:0] data_out,
+    output wire full,
+    output wire empty
+);
+
+    // FIFO parameters
+    localparam DEPTH = 3; // 3 levels of 1504-bit data
+
+    // FIFO memory and pointers
+    reg [1503:0] fifo_mem [0:DEPTH-1];
+    reg [1:0] write_ptr;
+    reg [1:0] read_ptr;
+    reg [1:0] fifo_count;
+
+    // Full and empty flags
+    assign full = (fifo_count == DEPTH);
+    assign empty = (fifo_count == 0);
+
+    // Write operation
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            write_ptr <= 0;
+            fifo_count <= 0;
+        end else if (write_enable && !full) begin
+            fifo_mem[write_ptr] <= data_in;
+            write_ptr <= write_ptr + 1;
+            fifo_count <= fifo_count + 1;
+        end
+    end
+
+    // Read operation
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            read_ptr <= 0;
+            data_out <= 0;
+        end else if (read_enable && !empty) begin
+            data_out <= fifo_mem[read_ptr];
+            read_ptr <= read_ptr + 1;
+            fifo_count <= fifo_count - 1;
+        end
+    end
+
+endmodule
+
+module BitStreamConverter (
+    input wire clk,                   // Clock signal
+    input wire rst,                   // Reset signal
+    input wire start,                 // Start signal to begin conversion
+    input wire [1503:0] data_in,      // 1504-bit input row from FIFO
+    output reg bit_out,               // Single bit output
+    output reg valid,                 // Output valid signal
+    output reg done                   // Done signal when all bits are sent
+);
+
+    reg [10:0] bit_counter;           // 11-bit counter to iterate through 1504 bits
+    reg [1:0] state;                  // State variable (2 bits)
+
+    // State encoding
+    localparam IDLE   = 2'b00;
+    localparam STREAM = 2'b01;
+    localparam DONE   = 2'b10;
+
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            // Reset all registers
+            state <= IDLE;
+            bit_counter <= 0;
+            bit_out <= 0;
+            valid <= 0;
+            done <= 0;
+        end else begin
+            case (state)
+                IDLE: begin
+                    valid <= 0;
+                    done <= 0;
+                    if (start) begin
+                        state <= STREAM;
+                        bit_counter <= 0;
+                    end
+                end
+
+                STREAM: begin
+                    // Output bits sequentially
+                    bit_out <= data_in[1503 - bit_counter]; // Send MSB first
+                    valid <= 1;
+                    if (bit_counter < 1503) begin
+                        bit_counter <= bit_counter + 1;
+                    end else begin
+                        state <= DONE;
+                    end
+                end
+
+                DONE: begin
+                    valid <= 0;
+                    done <= 1;
+                    state <= IDLE; // Return to IDLE after completion
+                end
+            endcase
+        end
+    end
+endmodule
