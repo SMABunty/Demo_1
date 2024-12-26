@@ -1,0 +1,90 @@
+module IntegratedBitStreamProcessor (
+    input wire clk,                   // Clock signal
+    input wire rst,                   // Reset signal
+    input wire write_enable,          // Enable writing to FIFO
+    input wire [1503:0] data_in,      // 1504-bit input chunk from BRAM
+    output reg bit_out,               // Single bit output
+    output reg valid,                 // Output valid signal
+    output reg done,                  // Processing done signal
+    output wire fifo_full,            // FIFO full signal
+    output wire fifo_empty            // FIFO empty signal
+);
+
+    // FIFO parameters
+    localparam DEPTH = 3; // 3 levels of 1504-bit data
+
+    // FIFO memory and pointers
+    reg [1503:0] fifo_mem [0:DEPTH-1];
+    reg [1:0] write_ptr;
+    reg [1:0] read_ptr;
+    reg [1:0] fifo_count;
+
+    // Bitstream conversion signals
+    reg [10:0] bit_counter;
+    reg [1:0] state;
+
+    // State encoding
+    localparam IDLE   = 2'b00;
+    localparam STREAM = 2'b01;
+    localparam DONE   = 2'b10;
+
+    // Full and empty flags
+    assign fifo_full = (fifo_count == DEPTH);
+    assign fifo_empty = (fifo_count == 0);
+
+    // FIFO Write Operation
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            write_ptr <= 0;
+            fifo_count <= 0;
+        end else if (write_enable && !fifo_full) begin
+            fifo_mem[write_ptr] <= data_in;
+            write_ptr <= write_ptr + 1;
+            fifo_count <= fifo_count + 1;
+        end
+    end
+
+    // FIFO Read Operation and Bitstream Conversion
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            read_ptr <= 0;
+            bit_counter <= 0;
+            state <= IDLE;
+            bit_out <= 0;
+            valid <= 0;
+            done <= 0;
+        end else begin
+            case (state)
+                IDLE: begin
+                    valid <= 0;
+                    done <= 0;
+                    if (!fifo_empty) begin
+                        state <= STREAM;
+                        bit_counter <= 0;
+                    end
+                end
+
+                STREAM: begin
+                    // Process bitstream from current FIFO chunk
+                    bit_out <= fifo_mem[read_ptr][1503 - bit_counter];
+                    valid <= 1;
+                    if (bit_counter < 1503) begin
+                        bit_counter <= bit_counter + 1;
+                    end else begin
+                        state <= DONE;
+                    end
+                end
+
+                DONE: begin
+                    valid <= 0;
+                    done <= 1;
+                    // Update read pointer and FIFO count after processing a chunk
+                    read_ptr <= read_ptr + 1;
+                    fifo_count <= fifo_count - 1;
+                    state <= IDLE;
+                end
+            endcase
+        end
+    end
+
+endmodule
