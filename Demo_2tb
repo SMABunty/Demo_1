@@ -1,0 +1,73 @@
+`timescale 1ns / 1ps
+
+module IntegratedBitStreamProcessor_tb;
+
+    reg clk;                  // Clock signal
+    reg rst;                  // Reset signal
+    reg write_enable;         // Write enable for FIFO
+    reg [1503:0] data_in;     // Input data (1504-bit chunk)
+    wire bit_out;             // Single bit output
+    wire valid;               // Output valid signal
+    wire done;                // Processing done signal
+    wire fifo_full;           // FIFO full flag
+    wire fifo_empty;          // FIFO empty flag
+
+    // Instantiate the DUT (Device Under Test)
+    IntegratedBitStreamProcessor uut (
+        .clk(clk),
+        .rst(rst),
+        .write_enable(write_enable),
+        .data_in(data_in),
+        .bit_out(bit_out),
+        .valid(valid),
+        .done(done),
+        .fifo_full(fifo_full),
+        .fifo_empty(fifo_empty)
+    );
+
+    // Clock generation (50 MHz)
+    initial clk = 0;
+    always #10 clk = ~clk; // 20 ns period
+
+    // Test stimulus
+    initial begin
+        // Initialize inputs
+        rst = 1;
+        write_enable = 0;
+        data_in = 0;
+
+        // Apply reset
+        #20;
+        rst = 0;
+
+        // Write first chunk of data into FIFO
+        write_enable = 1;
+        data_in = {376{4'hA}}; // 1504-bit chunk with a repeating pattern
+        #20; // Wait for one clock cycle
+
+        // Write second chunk of data into FIFO
+        data_in = {376{4'hF}}; // Another 1504-bit chunk
+        #20;
+
+        // Write third chunk of data into FIFO
+        data_in = {376{4'h5}}; // Another 1504-bit chunk
+        #20;
+
+        // Stop writing data
+        write_enable = 0;
+
+        // Wait for bitstream processing to complete
+        wait (done);
+        #20;
+
+        // Check results and observe outputs
+        while (!fifo_empty) begin
+            @(posedge valid);
+            $display("Bit Out: %b", bit_out);
+        end
+
+        #50;
+        $finish; // End simulation
+    end
+
+endmodule
